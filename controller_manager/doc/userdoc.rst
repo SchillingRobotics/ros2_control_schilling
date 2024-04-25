@@ -1,3 +1,5 @@
+:github_url: https://github.com/ros-controls/ros2_control/blob/{REPOS_FILE_BRANCH}/controller_manager/doc/userdoc.rst
+
 .. _controller_manager_userdoc:
 
 Controller Manager
@@ -9,10 +11,9 @@ Determinism
 -----------
 
 For best performance when controlling hardware you want the controller manager to have as little jitter as possible in the main control loop.
-The normal linux kernel is optimized for computational throughput and therefore is not well suited for hardware control.
-The two easiest kernel options are the `Real-time Ubuntu 22.04 LTS Beta <https://ubuntu.com/blog/real-time-ubuntu-released>`_ or `linux-image-rt-amd64 <https://packages.debian.org/bullseye/linux-image-rt-amd64>`_ on Debian Bullseye.
 
-If you have a realtime kernel installed, the main thread of Controller Manager attempts to configure ``SCHED_FIFO`` with a priority of ``50``.
+Independent of the kernel installed, the main thread of Controller Manager attempts to
+configure ``SCHED_FIFO`` with a priority of ``50``.
 By default, the user does not have permission to set such a high priority.
 To give the user such permissions, add a group named realtime and add the user controlling your robot to this group:
 
@@ -34,38 +35,100 @@ Afterwards, add the following limits to the realtime group in ``/etc/security/li
 
 The limits will be applied after you log out and in again.
 
+The normal linux kernel is optimized for computational throughput and therefore is not well suited for hardware control.
+Alternatives to the standard kernel include
+
+- `Real-time Ubuntu 22.04 LTS Beta <https://ubuntu.com/blog/real-time-ubuntu-released>`_ on Ubuntu 22.04
+- `linux-image-rt-amd64 <https://packages.debian.org/bullseye/linux-image-rt-amd64>`_ on Debian Bullseye
+- lowlatency kernel (``sudo apt install linux-lowlatency``) on any ubuntu
+
+Though installing a realtime-kernel will definitely get the best results when it comes to low
+jitter, using a lowlatency kernel can improve things a lot with being really easy to install.
+
+Subscribers
+-----------
+
+~/robot_description [std_msgs::msg::String]
+  String with the URDF xml, e.g., from ``robot_state_publisher``.
+  Reloading of the URDF is not supported yet.
+  All joints defined in the ``<ros2_control>``-tag have to be present in the URDF.
+
+
 Parameters
 -----------
 
-activate_components_on_start (optional; list<string>; default: empty)
-  Define which hardware components should be activated when controller manager is started.
+hardware_components_initial_state
+  Map of parameters for controlled lifecycle management of hardware components.
   The names of the components are defined as attribute of ``<ros2_control>``-tag in ``robot_description``.
-  All other components will stay ``UNCONFIGURED``.
-  If this and ``configure_components_on_start`` are empty, all available components will be activated.
-  If this or ``configure_components_on_start`` are not empty, any component not in either list will be in unconfigured state.
+  Hardware components found in ``robot_description``, but without explicit state definition will be immediately activated.
+  Detailed explanation of each parameter is given below.
+  The full structure of the map is given in the following example:
 
+.. code-block:: yaml
 
-configure_components_on_start (optional; list<string>; default: empty)
-  Define which hardware components should be configured when controller manager is started.
-  The names of the components are defined as attribute of ``<ros2_control>``-tag in ``robot_description``.
-  All other components will stay ``UNCONFIGURED``.
-  If this and ``activate_components_on_start`` are empty, all available components will be activated.
-  If this or ``activate_components_on_start`` are not empty, any component not in either list will be in unconfigured state.
+    hardware_components_initial_state:
+      unconfigured:
+        - "arm1"
+        - "arm2"
+      inactive:
+        - "base3"
 
+hardware_components_initial_state.unconfigured (optional; list<string>; default: empty)
+  Defines which hardware components will be only loaded immediately when controller manager is started.
 
-robot_description (mandatory; string)
-  String with the URDF string as robot description.
-  This is usually result of the parsed description files by ``xacro`` command.
+hardware_components_initial_state.inactive (optional; list<string>; default: empty)
+  Defines which hardware components will be configured immediately when controller manager is started.
 
 update_rate (mandatory; integer)
   The frequency of controller manager's real-time update loop.
   This loop reads states from hardware, updates controller and writes commands to hardware.
 
-
 <controller_name>.type
   Name of a plugin exported using ``pluginlib`` for a controller.
   This is a class from which controller's instance with name "``controller_name``" is created.
 
+Handling Multiple Controller Managers
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+When dealing with multiple controller managers, you have two options for managing different robot descriptions:
+
+1. **Using Namespaces:** You can place both the ``robot_state_publisher`` and the ``controller_manager`` nodes into the same namespace.
+
+.. code-block:: python
+
+   control_node = Node(
+       package="controller_manager",
+       executable="ros2_control_node",
+       parameters=[robot_controllers],
+       output="both",
+       namespace="rrbot",
+   )
+   robot_state_pub_node = Node(
+       package="robot_state_publisher",
+       executable="robot_state_publisher",
+       output="both",
+       parameters=[robot_description],
+       namespace="rrbot",
+   )
+
+2. **Using Remappings:** You can use remappings to handle different robot descriptions. This involves relaying topics using the ``remappings`` tag, allowing you to specify custom topics for each controller manager.
+
+.. code-block:: python
+
+   control_node = Node(
+       package="controller_manager",
+       executable="ros2_control_node",
+       parameters=[robot_controllers],
+       output="both",
+       remappings=[('robot_description', '/rrbot/robot_description')]
+   )
+   robot_state_pub_node = Node(
+       package="robot_state_publisher",
+       executable="robot_state_publisher",
+       output="both",
+       parameters=[robot_description],
+       namespace="rrbot",
+   )
 
 Helper scripts
 --------------

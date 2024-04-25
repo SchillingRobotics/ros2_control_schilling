@@ -93,8 +93,8 @@ public:
     updated_limits_.writeFromNonRT(joint_limits_);
 
     auto on_parameter_event_callback = [this](const std::vector<rclcpp::Parameter> & parameters) {
-      rcl_interfaces::msg::SetParametersResult result;
-      result.successful = true;
+      rcl_interfaces::msg::SetParametersResult parameter_set_result;
+      parameter_set_result.successful = true;
 
       std::vector<LimitsType> updated_joint_limits = joint_limits_;
       bool changed = false;
@@ -111,7 +111,7 @@ public:
         RCLCPP_INFO(node_logging_itf_->get_logger(), "Limits are dynamically updated!");
       }
 
-      return result;
+      return parameter_set_result;
     };
 
     parameter_callback_ = node_param_itf_->add_on_set_parameters_callback(on_parameter_event_callback);
