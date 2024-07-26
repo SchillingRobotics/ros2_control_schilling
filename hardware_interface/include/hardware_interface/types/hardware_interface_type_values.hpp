@@ -15,6 +15,8 @@
 #ifndef HARDWARE_INTERFACE__TYPES__HARDWARE_INTERFACE_TYPE_VALUES_HPP_
 #define HARDWARE_INTERFACE__TYPES__HARDWARE_INTERFACE_TYPE_VALUES_HPP_
 
+#include <vector>
+
 namespace hardware_interface
 {
 /// Constant defining position interface name
