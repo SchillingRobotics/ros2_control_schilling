@@ -882,14 +882,14 @@ std::vector<HardwareInfo> parse_control_resources_from_urdf(const std::string & 
         mimic_joint.offset = urdf_joint->mimic->offset;
         hw_info.mimic_joints.push_back(mimic_joint);
       }
-
-      if (urdf_joint->type == urdf::Joint::FIXED)
-      {
-        throw std::runtime_error(
-          "Joint '" + joint.name +
-          "' is of type 'fixed'. "
-          "Fixed joints do not make sense in ros2_control.");
-      }
+      // TODO(henrygerardmoore): re-enable this and investigate how we should be using the fixed joints in our xacro
+      // if (urdf_joint->type == urdf::Joint::FIXED)
+      // {
+      //   throw std::runtime_error(
+      //     "Joint '" + joint.name +
+      //     "' is of type 'fixed'. "
+      //     "Fixed joints do not make sense in ros2_control.");
+      // }
 
       joint_limits::JointLimits limits;
       getJointLimits(urdf_joint, limits);
