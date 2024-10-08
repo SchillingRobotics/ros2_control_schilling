@@ -346,7 +346,14 @@ void ControllerManager::init_resource_manager(const std::string & robot_descript
           RCLCPP_INFO(
             get_logger(), "Setting component '%s' to '%s' state.", component.c_str(),
             state.label().c_str());
-          resource_manager_->set_component_state(component, state);
+          if (
+            resource_manager_->set_component_state(component, state) ==
+            hardware_interface::return_type::ERROR)
+          {
+            throw std::runtime_error(
+              "Failed to set the initial state of the component : " + component + " to " +
+              state.label());
+          }
           components_to_activate.erase(component);
         }
       }
@@ -370,7 +377,14 @@ void ControllerManager::init_resource_manager(const std::string & robot_descript
   {
     rclcpp_lifecycle::State active_state(
       State::PRIMARY_STATE_ACTIVE, hardware_interface::lifecycle_state_names::ACTIVE);
-    resource_manager_->set_component_state(component, active_state);
+    if (
+      resource_manager_->set_component_state(component, active_state) ==
+      hardware_interface::return_type::ERROR)
+    {
+      throw std::runtime_error(
+        "Failed to set the initial state of the component : " + component + " to " +
+        active_state.label());
+    }
   }
   robot_description_notification_timer_->cancel();
 }
@@ -467,12 +481,21 @@ controller_interface::ControllerInterfaceBaseSharedPtr ControllerManager::load_c
       controller = chainable_loader_->createSharedInstance(controller_type);
     }
   }
-  catch (const pluginlib::CreateClassException & e)
+  catch (const std::exception & e)
   {
     RCLCPP_ERROR(
-      get_logger(), "Error happened during creation of controller '%s' with type '%s':\n%s",
-      controller_name.c_str(), controller_type.c_str(), e.what());
+      get_logger(),
+      "Caught exception of type : %s while loading the controller '%s' of plugin type '%s':\n%s",
+      typeid(e).name(), controller_name.c_str(), controller_type.c_str(), e.what());
     return nullptr;
+  }
+  catch (...)
+  {
+    RCLCPP_ERROR(
+      get_logger(),
+      "Caught unknown exception while loading the controller '%s' of plugin type '%s'",
+      controller_name.c_str(), controller_type.c_str());
+    throw;
   }
 
   ControllerSpec controller_spec;
@@ -607,8 +630,9 @@ controller_interface::return_type ControllerManager::unload_controller(
     catch (const std::exception & e)
     {
       RCLCPP_ERROR(
-        get_logger(), "Failed to clean-up the controller '%s' before unloading: %s",
-        controller_name.c_str(), e.what());
+        get_logger(),
+        "Caught exception of type : %s while cleaning up the controller '%s' before unloading: %s",
+        typeid(e).name(), controller_name.c_str(), e.what());
     }
     catch (...)
     {
@@ -712,8 +736,8 @@ controller_interface::return_type ControllerManager::configure_controller(
   catch (const std::exception & e)
   {
     RCLCPP_ERROR(
-      get_logger(), "Caught exception while configuring controller '%s': %s",
-      controller_name.c_str(), e.what());
+      get_logger(), "Caught exception of type : %s while configuring controller '%s': %s",
+      typeid(e).name(), controller_name.c_str(), e.what());
     return controller_interface::return_type::ERROR;
   }
   catch (...)
@@ -761,15 +785,28 @@ controller_interface::return_type ControllerManager::configure_controller(
       get_logger(),
       "Controller '%s' is chainable. Interfaces are being exported to resource manager.",
       controller_name.c_str());
-    auto state_interfaces = controller->export_state_interfaces();
-    auto ref_interfaces = controller->export_reference_interfaces();
-    if (ref_interfaces.empty() && state_interfaces.empty())
+    std::vector<hardware_interface::StateInterface::ConstSharedPtr> state_interfaces;
+    std::vector<hardware_interface::CommandInterface::SharedPtr> ref_interfaces;
+    try
     {
-      // TODO(destogl): Add test for this!
-      RCLCPP_ERROR(
-        get_logger(),
-        "Controller '%s' is chainable, but does not export any state or reference interfaces.",
-        controller_name.c_str());
+      state_interfaces = controller->export_state_interfaces();
+      ref_interfaces = controller->export_reference_interfaces();
+      if (ref_interfaces.empty() && state_interfaces.empty())
+      {
+        // TODO(destogl): Add test for this!
+        RCLCPP_ERROR(
+          get_logger(),
+          "Controller '%s' is chainable, but does not export any reference interfaces. Did you "
+          "override the on_export_method() correctly?",
+          controller_name.c_str());
+        return controller_interface::return_type::ERROR;
+      }
+    }
+    catch (const std::runtime_error & e)
+    {
+      RCLCPP_FATAL(
+        get_logger(), "Creation of the reference interfaces failed with following error: %s",
+        e.what());
       return controller_interface::return_type::ERROR;
     }
     resource_manager_->import_controller_reference_interfaces(controller_name, ref_interfaces);
@@ -1424,8 +1461,8 @@ controller_interface::ControllerInterfaceBaseSharedPtr ControllerManager::add_co
   {
     to.clear();
     RCLCPP_ERROR(
-      get_logger(), "Caught exception while initializing controller '%s': %s",
-      controller.info.name.c_str(), e.what());
+      get_logger(), "Caught exception of type : %s while initializing controller '%s': %s",
+      typeid(e).name(), controller.info.name.c_str(), e.what());
     return nullptr;
   }
   catch (...)
@@ -1500,8 +1537,8 @@ void ControllerManager::deactivate_controllers(
       catch (const std::exception & e)
       {
         RCLCPP_ERROR(
-          get_logger(), "Caught exception while deactivating the  controller '%s': %s",
-          controller_name.c_str(), e.what());
+          get_logger(), "Caught exception of type : %s while deactivating the  controller '%s': %s",
+          typeid(e).name(), controller_name.c_str(), e.what());
         continue;
       }
       catch (...)
@@ -1618,7 +1655,10 @@ void ControllerManager::activate_controllers(
       catch (const std::exception & e)
       {
         RCLCPP_ERROR(
-          get_logger(), "Can't activate controller '%s': %s", controller_name.c_str(), e.what());
+          get_logger(),
+          "Caught exception of type : %s while claiming the command interfaces. Can't activate "
+          "controller '%s': %s",
+          typeid(e).name(), controller_name.c_str(), e.what());
         assignment_successful = false;
         break;
       }
@@ -1653,7 +1693,10 @@ void ControllerManager::activate_controllers(
       catch (const std::exception & e)
       {
         RCLCPP_ERROR(
-          get_logger(), "Can't activate controller '%s': %s", controller_name.c_str(), e.what());
+          get_logger(),
+          "Caught exception of type : %s while claiming the state interfaces. Can't activate "
+          "controller '%s': %s",
+          typeid(e).name(), controller_name.c_str(), e.what());
         assignment_successful = false;
         break;
       }
@@ -1681,8 +1724,8 @@ void ControllerManager::activate_controllers(
     catch (const std::exception & e)
     {
       RCLCPP_ERROR(
-        get_logger(), "Caught exception while activating the controller '%s': %s",
-        controller_name.c_str(), e.what());
+        get_logger(), "Caught exception of type : %s while activating the controller '%s': %s",
+        typeid(e).name(), controller_name.c_str(), e.what());
       continue;
     }
     catch (...)
@@ -2287,8 +2330,8 @@ controller_interface::return_type ControllerManager::update(
         catch (const std::exception & e)
         {
           RCLCPP_ERROR(
-            get_logger(), "Caught exception while updating controller '%s': %s",
-            loaded_controller.info.name.c_str(), e.what());
+            get_logger(), "Caught exception of type : %s while updating controller '%s': %s",
+            typeid(e).name(), loaded_controller.info.name.c_str(), e.what());
           controller_ret = controller_interface::return_type::ERROR;
         }
         catch (...)

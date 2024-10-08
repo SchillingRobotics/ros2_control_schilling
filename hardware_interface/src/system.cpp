@@ -21,6 +21,7 @@
 
 #include "hardware_interface/handle.hpp"
 #include "hardware_interface/hardware_info.hpp"
+#include "hardware_interface/lifecycle_helpers.hpp"
 #include "hardware_interface/system_interface.hpp"
 #include "hardware_interface/types/hardware_interface_return_values.hpp"
 #include "hardware_interface/types/lifecycle_state_names.hpp"
@@ -180,7 +181,9 @@ const rclcpp_lifecycle::State & System::deactivate()
 const rclcpp_lifecycle::State & System::error()
 {
   std::unique_lock<std::recursive_mutex> lock(system_mutex_);
-  if (impl_->get_lifecycle_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_UNKNOWN)
+  if (
+    impl_->get_lifecycle_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_UNKNOWN &&
+    impl_->get_lifecycle_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED)
   {
     switch (impl_->on_error(impl_->get_lifecycle_state()))
     {
@@ -199,14 +202,59 @@ const rclcpp_lifecycle::State & System::error()
   return impl_->get_lifecycle_state();
 }
 
-std::vector<StateInterface> System::export_state_interfaces()
+std::vector<StateInterface::ConstSharedPtr> System::export_state_interfaces()
 {
-  return impl_->export_state_interfaces();
+  // BEGIN (Handle export change): for backward compatibility, can be removed if
+  // export_command_interfaces() method is removed
+  std::vector<StateInterface> interfaces = impl_->export_state_interfaces();
+  // END: for backward compatibility
+
+  // If no StateInterfaces has been exported, this could mean:
+  // a) there is nothing to export -> on_export_state_interfaces() does return nothing as well
+  // b) default implementation for export_state_interfaces() is used -> new functionality ->
+  // Framework exports and creates everything
+  if (interfaces.empty())
+  {
+    return impl_->on_export_state_interfaces();
+  }
+
+  // BEGIN (Handle export change): for backward compatibility, can be removed if
+  // export_command_interfaces() method is removed
+  std::vector<StateInterface::ConstSharedPtr> interface_ptrs;
+  interface_ptrs.reserve(interfaces.size());
+  for (auto const & interface : interfaces)
+  {
+    interface_ptrs.emplace_back(std::make_shared<const StateInterface>(interface));
+  }
+  return interface_ptrs;
+  // END: for backward compatibility
 }
 
-std::vector<CommandInterface> System::export_command_interfaces()
+std::vector<CommandInterface::SharedPtr> System::export_command_interfaces()
 {
-  return impl_->export_command_interfaces();
+  // BEGIN (Handle export change): for backward compatibility, can be removed if
+  // export_command_interfaces() method is removed
+  std::vector<CommandInterface> interfaces = impl_->export_command_interfaces();
+  // END: for backward compatibility
+
+  // If no CommandInterface has been exported, this could mean:
+  // a) there is nothing to export -> on_export_command_interfaces() does return nothing as well
+  // b) default implementation for export_command_interfaces() is used -> new functionality ->
+  // Framework exports and creates everything
+  if (interfaces.empty())
+  {
+    return impl_->on_export_command_interfaces();
+  }
+  // BEGIN (Handle export change): for backward compatibility, can be removed if
+  // export_command_interfaces() method is removed
+  std::vector<CommandInterface::SharedPtr> interface_ptrs;
+  interface_ptrs.reserve(interfaces.size());
+  for (auto & interface : interfaces)
+  {
+    interface_ptrs.emplace_back(std::make_shared<CommandInterface>(std::move(interface)));
+  }
+  return interface_ptrs;
+  // END: for backward compatibility
 }
 
 return_type System::prepare_command_mode_switch(
@@ -242,9 +290,7 @@ return_type System::read(const rclcpp::Time & time, const rclcpp::Duration & per
       impl_->get_name().c_str());
     return return_type::OK;
   }
-  if (
-    impl_->get_lifecycle_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED ||
-    impl_->get_lifecycle_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_FINALIZED)
+  if (lifecycleStateThatRequiresNoAction(impl_->get_lifecycle_state().id()))
   {
     return return_type::OK;
   }
@@ -272,9 +318,7 @@ return_type System::write(const rclcpp::Time & time, const rclcpp::Duration & pe
       impl_->get_name().c_str());
     return return_type::OK;
   }
-  if (
-    impl_->get_lifecycle_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED ||
-    impl_->get_lifecycle_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_FINALIZED)
+  if (lifecycleStateThatRequiresNoAction(impl_->get_lifecycle_state().id()))
   {
     return return_type::OK;
   }

@@ -21,6 +21,7 @@
 
 #include "hardware_interface/handle.hpp"
 #include "hardware_interface/hardware_info.hpp"
+#include "hardware_interface/lifecycle_helpers.hpp"
 #include "hardware_interface/sensor_interface.hpp"
 #include "hardware_interface/types/hardware_interface_return_values.hpp"
 #include "hardware_interface/types/lifecycle_state_names.hpp"
@@ -181,7 +182,9 @@ const rclcpp_lifecycle::State & Sensor::deactivate()
 const rclcpp_lifecycle::State & Sensor::error()
 {
   std::unique_lock<std::recursive_mutex> lock(sensors_mutex_);
-  if (impl_->get_lifecycle_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_UNKNOWN)
+  if (
+    impl_->get_lifecycle_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_UNKNOWN &&
+    impl_->get_lifecycle_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED)
   {
     switch (impl_->on_error(impl_->get_lifecycle_state()))
     {
@@ -200,9 +203,32 @@ const rclcpp_lifecycle::State & Sensor::error()
   return impl_->get_lifecycle_state();
 }
 
-std::vector<StateInterface> Sensor::export_state_interfaces()
+std::vector<StateInterface::ConstSharedPtr> Sensor::export_state_interfaces()
 {
-  return impl_->export_state_interfaces();
+  // BEGIN (Handle export change): for backward compatibility, can be removed if
+  // export_command_interfaces() method is removed
+  std::vector<StateInterface> interfaces = impl_->export_state_interfaces();
+  // END: for backward compatibility
+
+  // If no StateInterfaces has been exported, this could mean:
+  // a) there is nothing to export -> on_export_state_interfaces() does return nothing as well
+  // b) default implementation for export_state_interfaces() is used -> new functionality ->
+  // Framework exports and creates everything
+  if (interfaces.empty())
+  {
+    return impl_->on_export_state_interfaces();
+  }
+
+  // BEGIN (Handle export change): for backward compatibility, can be removed if
+  // export_command_interfaces() method is removed
+  std::vector<StateInterface::ConstSharedPtr> interface_ptrs;
+  interface_ptrs.reserve(interfaces.size());
+  for (auto const & interface : interfaces)
+  {
+    interface_ptrs.emplace_back(std::make_shared<const StateInterface>(interface));
+  }
+  return interface_ptrs;
+  // END: for backward compatibility
 }
 
 std::string Sensor::get_name() const { return impl_->get_name(); }
@@ -224,9 +250,7 @@ return_type Sensor::read(const rclcpp::Time & time, const rclcpp::Duration & per
       impl_->get_name().c_str());
     return return_type::OK;
   }
-  if (
-    impl_->get_lifecycle_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED ||
-    impl_->get_lifecycle_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_FINALIZED)
+  if (lifecycleStateThatRequiresNoAction(impl_->get_lifecycle_state().id()))
   {
     return return_type::OK;
   }
