@@ -502,8 +502,9 @@ controller_interface::ControllerInterfaceBaseSharedPtr ControllerManager::load_c
   controller_spec.c = controller;
   controller_spec.info.name = controller_name;
   controller_spec.info.type = controller_type;
-  controller_spec.next_update_cycle_time = std::make_shared<rclcpp::Time>(
-    0, 0, this->get_node_clock_interface()->get_clock()->get_clock_type());
+  controller_spec.next_update_cycle_time = controller_spec.prev_update_cycle_time =
+    std::make_shared<rclcpp::Time>(
+      0, 0, this->get_node_clock_interface()->get_clock()->get_clock_type());
 
   // We have to fetch the parameters_file at the time of loading the controller, because this way we
   // can load them at the creation of the LifeCycleNode and this helps in using the features such as
@@ -1616,8 +1617,10 @@ void ControllerManager::activate_controllers(
       continue;
     }
     auto controller = found_it->c;
-    // reset the next update cycle time for newly activated controllers
+    // reset the next and previous update cycle time for newly activated controllers
     *found_it->next_update_cycle_time =
+      rclcpp::Time(0, 0, this->get_node_clock_interface()->get_clock()->get_clock_type());
+    *found_it->prev_update_cycle_time =
       rclcpp::Time(0, 0, this->get_node_clock_interface()->get_clock()->get_clock_type());
 
     bool assignment_successful = true;
@@ -2274,7 +2277,7 @@ void ControllerManager::manage_switch()
 }
 
 controller_interface::return_type ControllerManager::update(
-  const rclcpp::Time & time, const rclcpp::Duration & period)
+  const rclcpp::Time & time, const rclcpp::Duration & /* period */)
 {
   std::vector<ControllerSpec> & rt_controller_list =
     rt_controllers_wrapper_.update_and_get_used_by_rt_list();
@@ -2292,9 +2295,21 @@ controller_interface::return_type ControllerManager::update(
     {
       const auto controller_update_rate = loaded_controller.c->get_update_rate();
       const bool run_controller_at_cm_rate = (controller_update_rate >= update_rate_);
+      const auto cm_period_default = rclcpp::Duration::from_seconds(1.0 / update_rate_);
       const auto controller_period =
-        run_controller_at_cm_rate ? period
+        run_controller_at_cm_rate ? cm_period_default
                                   : rclcpp::Duration::from_seconds((1.0 / controller_update_rate));
+      const auto controller_period_jitter = controller_period * 0.01;  // allow 1% jitter
+      bool time_is_zero =
+        (time ==
+         rclcpp::Time(0, 0, this->get_node_clock_interface()->get_clock()->get_clock_type()));
+      // should be true for first time too when next_update_cycle_time is zero
+      bool time_past_next_update =
+        time.seconds() >= loaded_controller.next_update_cycle_time->seconds();
+      bool time_near_next_update =
+        (time.seconds() < loaded_controller.next_update_cycle_time->seconds()) &&
+        ((*loaded_controller.next_update_cycle_time - time) <= controller_period_jitter);
+      bool first_time = false;
 
       if (
         *loaded_controller.next_update_cycle_time ==
@@ -2305,12 +2320,10 @@ controller_interface::return_type ControllerManager::update(
           get_logger(), "Setting next_update_cycle_time to %fs for the controller : %s",
           time.seconds(), loaded_controller.info.name.c_str());
         *loaded_controller.next_update_cycle_time = time;
+        first_time = true;
       }
 
-      bool controller_go =
-        (time ==
-         rclcpp::Time(0, 0, this->get_node_clock_interface()->get_clock()->get_clock_type())) ||
-        (time.seconds() >= loaded_controller.next_update_cycle_time->seconds());
+      bool controller_go = time_is_zero || time_past_next_update || time_near_next_update;
 
       RCLCPP_DEBUG(
         get_logger(), "update_loop_counter: '%d ' controller_go: '%s ' controller_name: '%s '",
@@ -2320,7 +2333,7 @@ controller_interface::return_type ControllerManager::update(
       if (controller_go)
       {
         const auto controller_actual_period =
-          (time - *loaded_controller.next_update_cycle_time) + controller_period;
+          first_time ? controller_period : (time - *loaded_controller.prev_update_cycle_time);
         auto controller_ret = controller_interface::return_type::OK;
         // Catch exceptions thrown by the controller update function
         try
@@ -2342,7 +2355,13 @@ controller_interface::return_type ControllerManager::update(
           controller_ret = controller_interface::return_type::ERROR;
         }
 
-        *loaded_controller.next_update_cycle_time += controller_period;
+        // make sure the next update time is in the future
+        do
+        {
+          *loaded_controller.next_update_cycle_time += controller_period;
+        } while (*loaded_controller.next_update_cycle_time <= time);
+
+        *loaded_controller.prev_update_cycle_time = time;
 
         if (controller_ret != controller_interface::return_type::OK)
         {

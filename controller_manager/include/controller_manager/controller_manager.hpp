@@ -125,6 +125,7 @@ public:
     controller_spec.info.name = controller_name;
     controller_spec.info.type = controller_type;
     controller_spec.next_update_cycle_time = std::make_shared<rclcpp::Time>(0);
+    controller_spec.prev_update_cycle_time = std::make_shared<rclcpp::Time>(0);
     return add_controller_impl(controller_spec);
   }
 
